@@ -2,7 +2,7 @@ import os
 
 # --- НАСТРОЙКИ ---
 # Папки, которые нужно пропустить
-EXCLUDE_DIRS = {'.pio', '.vscode', '.git', '__pycache__', 'test', }
+EXCLUDE_DIRS = {'.pio', '.vscode', '.git', '__pycache__', 'test', "Adafruit_AHTX0", "Adafruit_GFX", "Adafruit_lib", "Adafruit_SSD1306", "btn"}
 # Расширения файлов, которые нужно включить
 INCLUDE_EXTENSIONS = {'.h', '.cpp', '.c', '.ini', '.txt'}
 # Имя выходного файла
