@@ -1,18 +1,28 @@
 #include <Arduino.h>
+#include "FSMManager.h"
+#include "Button2.h"
+#include "AppConfig.h"
 
-// put function declarations here:
-int myFunction(int, int);
+
+Button2 btn(0); // Кнопка на GPIO 0 (ESP32-C3)
 
 void setup() {
-  // put your setup code here, to run once:
-  int result = myFunction(2, 3);
+    Serial.begin(115200);
+    AppConfig.begin(); 
+    // Настройка кнопки через библиотеку Button2
+    btn.setClickHandler([](Button2& b){
+        fsm.handleEvent(FSMEvent::BTN_SHORT);
+    });
+    
+    btn.setLongClickHandler([](Button2& b){
+        fsm.handleEvent(FSMEvent::BTN_LONG);
+    });
+
+    // Инициализация FSM
+    fsm.init(StateType::WORK); 
 }
 
 void loop() {
-  // put your main code here, to run repeatedly:
-}
-
-// put function definitions here:
-int myFunction(int x, int y) {
-  return x + y;
+    btn.loop();     // Проверка кнопки
+    fsm.update();   // Тик текущего состояния (onUpdate)
 }

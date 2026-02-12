@@ -1,0 +1,428 @@
+PROJECT STRUCTURE AND SOURCE CODE
+Generated from: C:\Users\ivans\Documents\!!!Neyasity NEW\Logger V4_SOFT\lib\FSM
+==================================================
+
+FILE TREE:
+./
+    FSMManager.cpp
+    FSMManager.h
+    FSM_Definitions.h
+    project_context.txt
+    StateFactory.cpp
+    StateFactory.h
+    states/
+        State_DataSend.h
+        State_NetSetup.h
+        State_ScreenOn.h
+        State_Sleep.h
+        State_Work.h
+
+==================================================
+
+--- FILE: FSMManager.cpp ---
+#include "FSMManager.h"
+
+FSMManager fsm;
+
+void FSMManager::init(StateType initialState) {
+    _changeState(initialState);
+}
+
+void FSMManager::update() {
+    if (_currentState) {
+        _currentState->onUpdate();
+    }
+}
+
+void FSMManager::_changeState(StateType type) {
+    if (_currentState) {
+        if (_currentState->getType() == type) return;
+        _currentState->onExit();
+        delete _currentState; // Освобождаем память старого состояния
+    }
+
+    _currentState = StateFactory::createState(type);
+    
+    if (_currentState) {
+        _currentState->onEnter();
+    }
+}
+
+void FSMManager::handleEvent(FSMEvent event) {
+    if (!_currentState) return;
+
+    StateType current = _currentState->getType();
+
+    // Глобальная логика переходов
+    switch (event) {
+        case FSMEvent::BTN_SHORT:
+            if (current == StateType::SLEEP) _changeState(StateType::SCREEN_ON);
+            else if (current == StateType::SCREEN_ON) {
+                // В SCREEN_ON короткое нажатие просто меняет индекс экрана внутри DisplayUI
+                // Но если это 3-й экран, можно вернуться в SLEEP или сбросить таймер
+            }
+            break;
+
+        case FSMEvent::TIMEOUT:
+            if (current == StateType::SCREEN_ON) _changeState(StateType::SLEEP);
+            break;
+
+        case FSMEvent::SENSOR_DONE:
+            // После измерения решаем: слать данные или спать
+            _changeState(StateType::SLEEP); 
+            break;
+            
+        default:
+            break;
+    }
+}
+
+StateType FSMManager::getCurrentStateType() const {
+    return _currentState ? _currentState->getType() : StateType::NONE;
+}
+
+--- FILE: FSMManager.h ---
+#ifndef FSM_MANAGER_H
+#define FSM_MANAGER_H
+
+#include "FSM_Definitions.h"
+#include "StateFactory.h"
+
+class FSMManager {
+private:
+    BaseState* _currentState = nullptr;
+    void _changeState(StateType type);
+
+public:
+    FSMManager() {}
+    void init(StateType initialState);
+    void update(); // Вызывать в loop()
+    void handleEvent(FSMEvent event);
+    StateType getCurrentStateType() const;
+};
+
+extern FSMManager fsm;
+
+#endif
+
+--- FILE: FSM_Definitions.h ---
+#ifndef FSM_DEFINITIONS_H
+#define FSM_DEFINITIONS_H
+
+#include <Arduino.h>
+
+enum class StateType {
+    SLEEP,
+    SCREEN_ON,
+    WORK,
+    DATA_SEND,
+    NET_SETUP,
+    NONE
+};
+
+enum class FSMEvent {
+    BTN_SHORT,
+    BTN_LONG,
+    BTN_DOUBLE,
+    SENSOR_DONE,
+    SEND_SUCCESS,
+    SEND_FAIL,
+    SYNC_SUCCESS, // Время успешно получено
+    SYNC_FAIL,
+    TIMEOUT
+};
+
+// Интерфейс состояния
+class BaseState {
+public:
+    virtual ~BaseState() {}
+    virtual void onEnter() = 0;
+    virtual void onUpdate() = 0; // Тик
+    virtual void onExit() = 0;
+    virtual StateType getType() const = 0;
+};
+
+#endif
+
+--- FILE: project_context.txt ---
+
+
+--- FILE: StateFactory.cpp ---
+#include "StateFactory.h"
+#include "states/State_Sleep.h"
+#include "states/State_Work.h"
+#include "states/State_ScreenOn.h"
+#include "states/State_DataSend.h"
+#include "states/State_NetSetup.h"
+
+BaseState* StateFactory::createState(StateType type) {
+    switch (type) {
+        case StateType::SLEEP:     return new State_Sleep();
+        case StateType::WORK:      return new State_Work();
+        case StateType::SCREEN_ON: return new State_ScreenOn();
+        case StateType::DATA_SEND: return new State_DataSend();
+        case StateType::NET_SETUP: return new State_NetSetup();
+        default: return nullptr;
+    }
+}
+
+--- FILE: StateFactory.h ---
+#ifndef STATE_FACTORY_H
+#define STATE_FACTORY_H
+
+#include "FSM_Definitions.h"
+
+class StateFactory {
+public:
+    static BaseState* createState(StateType type);
+};
+
+#endif
+
+--- FILE: states\State_DataSend.h ---
+#ifndef STATE_DATA_SEND_H
+#define STATE_DATA_SEND_H
+
+#include "../FSM_Definitions.h"
+#include "AppConfig.h"
+#include "LoRaManager.h" // Ваша обертка над Ra-01
+#include <WiFi.h>
+
+class State_DataSend : public BaseState {
+    bool _isFinished = false;
+
+public:
+    void onEnter() override {
+        Serial.println("FSM: -> DATA_SEND");
+        _isFinished = false;
+
+        switch (AppConfig.mode) {
+            case MODE_NORMAL:
+                sendNormal();
+                break;
+            case MODE_STANDARD:
+                sendStandard();
+                break;
+            case MODE_SCHEDULE:
+                sendBulk();
+                break;
+            case MODE_ECO:
+                // В ECO отправка только по нажатию кнопки (обрабатывается в handleEvent)
+                _isFinished = true;
+                break;
+        }
+    }
+
+    void sendNormal() {
+        Serial.println("Sending: WiFi -> DB");
+        WiFi.begin(AppConfig.ssid, AppConfig.pass);
+        
+        // Попытка WiFi (таймаут 10 сек)
+        int attempts = 0;
+        while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+            delay(500);
+            attempts++;
+        }
+
+        if (WiFi.status() == WL_CONNECTED) {
+            // Отправка в БД (HTTP POST)
+            // if (http.post(...)) _isFinished = true;
+        } else {
+            Serial.println("WiFi Fail, switching to LoRa");
+            sendStandard(); // Резервный канал LoRa
+        }
+        _isFinished = true;
+    }
+
+    void sendStandard() {
+        // Логика LoRa Ra-01
+        DataEntry lastData = dataLogger.getLastEntry();
+        lora.sendPacket(lastData); 
+        _isFinished = true;
+    }
+
+    void sendBulk() {
+        // Отправка всех накопленных данных за X дней
+        // Цикл по памяти DataLogger
+        _isFinished = true;
+    }
+
+    void onUpdate() override {
+        if (_isFinished) {
+            fsm.handleEvent(FSMEvent::SEND_SUCCESS);
+        }
+    }
+
+    void onExit() override {
+        WiFi.disconnect(true);
+        WiFi.mode(WIFI_OFF);
+    }
+
+    StateType getType() const override { return StateType::DATA_SEND; }
+};
+
+#endif
+
+--- FILE: states\State_NetSetup.h ---
+#ifndef STATE_NET_SETUP_H
+#define STATE_NET_SETUP_H
+
+#include "FSM_Definitions.h"
+#include <WiFi.h>
+#include "time.h"
+#include "AppConfig.h" // Предполагаем, что тут хранятся SSID и PASS
+
+class State_NetSetup : public BaseState {
+private:
+    uint32_t _startAttemptTime;
+    const uint32_t _timeout = 15000; // 15 секунд на попытку подключения
+    bool _isSyncing = false;
+
+public:
+    void onEnter() override {
+        Serial.println("FSM: -> NET_SETUP (WiFi connecting...)");
+        _startAttemptTime = millis();
+        _isSyncing = false;
+
+        WiFi.begin(AppConfig.wifi_ssid, AppConfig.wifi_pass);
+    }
+
+    void onUpdate() override {
+        // 1. Проверка статуса подключения
+        if (WiFi.status() == WL_CONNECTED) {
+            if (!_isSyncing) {
+                Serial.println("WiFi Connected. Syncing NTP...");
+                configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+                _isSyncing = true;
+            }
+
+            // Проверяем, получено ли системное время (год > 1970)
+            struct tm timeinfo;
+            if (getLocalTime(&timeinfo)) {
+                Serial.println("Time Synchronized!");
+                // Сообщаем менеджеру об успехе
+                extern class FSMManager fsm; 
+                fsm.handleEvent(FSMEvent::SYNC_SUCCESS);
+            }
+        }
+
+        // 2. Проверка тайм-аута (если WiFi не подключился за 15 сек)
+        if (millis() - _startAttemptTime > _timeout) {
+            Serial.println("WiFi Timeout!");
+            extern class FSMManager fsm;
+            fsm.handleEvent(FSMEvent::SYNC_FAIL);
+        }
+    }
+
+    void onExit() override {
+        Serial.println("FSM: <- NET_SETUP (Turning WiFi off)");
+        WiFi.disconnect(true);
+        WiFi.mode(WIFI_OFF); // Важно для энергосбережения
+    }
+
+    StateType getType() const override { return StateType::NET_SETUP; }
+};
+
+#endif
+
+--- FILE: states\State_ScreenOn.h ---
+#ifndef STATE_SCREEN_H
+#define STATE_SCREEN_H
+
+#include "FSM_Definitions.h"
+
+class State_ScreenOn : public BaseState {
+    uint32_t _startTime;
+public:
+    void onEnter() override {
+        _startTime = millis();
+        Serial.println("FSM: -> SCREEN_ON");
+        // Display.show();
+    }
+    void onUpdate() override {
+        // Если прошло больше А секунд (берем из конфига)
+        // if (millis() - _startTime > AppConfig.A * 1000) { ... }
+    }
+    void onExit() override { /* Display.hide(); */ }
+    StateType getType() const override { return StateType::SCREEN_ON; }
+};
+
+#endif
+
+--- FILE: states\State_Sleep.h ---
+#include "FSM_Definitions.h"
+
+class State_Sleep : public BaseState {
+public:
+    void onEnter() override { 
+        Serial.println("FSM: -> SLEEP (Entering Light Sleep)"); 
+        // Настройка пробуждения по таймеру T и по кнопке
+        // esp_light_sleep_start();
+    }
+    void onUpdate() override {} 
+    void onExit() override { Serial.println("FSM: <- SLEEP (Waking up)"); }
+    StateType getType() const override { return StateType::SLEEP; }
+};
+
+--- FILE: states\State_Work.h ---
+#ifndef STATE_WORK_H
+#define STATE_WORK_H
+
+#include "../FSM_Definitions.h"
+#include "AppConfig.h"
+#include "DataLogger.h"
+#include "Adafruit_AHTX0.h"
+
+// Предполагаем, что объекты сенсоров объявлены глобально или в DeviceManager
+extern Adafruit_AHTX0 aht; 
+
+class State_Work : public BaseState {
+public:
+    void onEnter() override {
+        Serial.println("FSM: -> WORK (Measuring)");
+
+        // 1. Измерение AHT-10
+        sensors_event_t humidity, temp;
+        aht.getEvent(&humidity, &temp);
+
+        // 2. Измерение АКБ (через делитель, привязанный к пину из Pinout.h)
+        // Расчет процента зависит от ваших резисторов
+        float v_bat = (analogRead(ADC_BAT_PIN) * 3.3 / 4095.0) * 2.0; 
+        int bat_pct = map(v_bat * 100, 330, 420, 0, 100);
+        bat_pct = constrain(bat_pct, 0, 100);
+
+        // 3. Запись в логгер
+        // Структура: Время (внутреннее), Темп, Влажн, АКБ
+        DataEntry entry;
+        entry.timestamp = time(nullptr); // Текущее время из RTC ESP32
+        entry.temperature = temp.temperature;
+        entry.humidity = humidity.relative_humidity;
+        entry.battery = bat_pct;
+        
+        dataLogger.write(entry);
+
+        // Увеличиваем счетчик пробуждений в конфиге
+        appConfig.wakeCount++;
+        appConfig.save(); // Сохраняем в NVS
+
+        // 4. Логика переходов
+        if (appConfig.wakeCount % appConfig.D == 0) {
+            fsm.handleEvent(FSMEvent::SENSOR_DONE); // В коде менеджера переключим на NET_SETUP
+        } else if (appConfig.wakeCount % appConfig.N == 0) {
+            fsm.handleEvent(FSMEvent::SENSOR_DONE); // Или на DATA_SEND
+        } else {
+            fsm.handleEvent(FSMEvent::SENSOR_DONE); // На SLEEP
+        }
+    }
+
+    void onUpdate() override {
+        // Логика перехода вынесена в onEnter, так как замер мгновенный
+    }
+
+    void onExit() override {}
+    
+    StateType getType() const override { return StateType::WORK; }
+};
+
+#endif
+
