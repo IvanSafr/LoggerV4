@@ -1,6 +1,6 @@
 #include "FSMManager.h"
 #include "StateFactory.h"
-#include "AppConfig.h" 
+#include "AppConfig.h"
 
 FSMManager fsm;
 
@@ -18,11 +18,11 @@ void FSMManager::_changeState(StateType type) {
     if (_currentState) {
         if (_currentState->getType() == type) return;
         _currentState->onExit();
-        delete _currentState; // Освобождаем память старого состояния
+        delete _currentState;
     }
 
     _currentState = StateFactory::createState(type);
-    
+
     if (_currentState) {
         _currentState->onEnter();
     }
@@ -37,21 +37,32 @@ void FSMManager::handleEvent(FSMEvent event) {
     switch (event) {
         case FSMEvent::BTN_SHORT:
             if (current == StateType::SLEEP) _changeState(StateType::SCREEN_ON);
-            else if (current == StateType::SCREEN_ON) {
-                // В SCREEN_ON короткое нажатие просто меняет индекс экрана внутри DisplayUI
-                // Но если это 3-й экран, можно вернуться в SLEEP или сбросить таймер
-            }
+            // ... (другие обработки кнопок)
             break;
 
         case FSMEvent::TIMEOUT:
             if (current == StateType::SCREEN_ON) _changeState(StateType::SLEEP);
             break;
 
-        case FSMEvent::SENSOR_DONE:
-            // После измерения решаем: слать данные или спать
-            _changeState(StateType::SLEEP); 
+        // <<< НОВОЕ: Обработка событий после измерения >>>
+        case FSMEvent::WORK_COMPLETE:
+            _changeState(StateType::SLEEP);
             break;
-            
+        case FSMEvent::TIME_TO_SEND:
+            _changeState(StateType::DATA_SEND);
+            break;
+        case FSMEvent::TIME_TO_SYNC:
+            _changeState(StateType::NET_SETUP);
+            break;
+
+        // <<< НОВОЕ: Обработка событий после сетевых операций. Возвращаемся в сон. >>>
+        case FSMEvent::SEND_SUCCESS:
+        case FSMEvent::SEND_FAIL:
+        case FSMEvent::SYNC_SUCCESS:
+        case FSMEvent::SYNC_FAIL:
+            _changeState(StateType::SLEEP);
+            break;
+
         default:
             break;
     }
