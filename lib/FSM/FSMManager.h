@@ -1,9 +1,11 @@
 #include "FSMManager.h"
 #include "StateFactory.h"
 #include "AppConfig.h"
+#include "states/State_ScreenOn.h" // <<< НОВОЕ: Нужно для приведения типа
 
 FSMManager fsm;
 
+// ... (init, update, _changeState без изменений) ...
 void FSMManager::init(StateType initialState) {
     _changeState(initialState);
 }
@@ -33,18 +35,27 @@ void FSMManager::handleEvent(FSMEvent event) {
 
     StateType current = _currentState->getType();
 
-    // Глобальная логика переходов
     switch (event) {
         case FSMEvent::BTN_SHORT:
-            if (current == StateType::SLEEP) _changeState(StateType::SCREEN_ON);
-            // ... (другие обработки кнопок)
+            if (current == StateType::SLEEP) {
+                _changeState(StateType::SCREEN_ON);
+            }
+            // <<< НОВОЕ: Логика переключения экранов >>>
+            else if (current == StateType::SCREEN_ON) {
+                // Приводим указатель базового класса к типу дочернего,
+                // чтобы получить доступ к его уникальному методу resetTimer()
+                if (auto screenOnState = dynamic_cast<State_ScreenOn*>(_currentState)) {
+                    DisplayUI.nextScreen();      // Сначала переключаем экран
+                    screenOnState->resetTimer(); // Затем сбрасываем таймер
+                }
+            }
             break;
 
         case FSMEvent::TIMEOUT:
             if (current == StateType::SCREEN_ON) _changeState(StateType::SLEEP);
             break;
 
-        // <<< НОВОЕ: Обработка событий после измерения >>>
+        // ... (остальная часть switch без изменений) ...
         case FSMEvent::WORK_COMPLETE:
             _changeState(StateType::SLEEP);
             break;
@@ -54,15 +65,12 @@ void FSMManager::handleEvent(FSMEvent event) {
         case FSMEvent::TIME_TO_SYNC:
             _changeState(StateType::NET_SETUP);
             break;
-
-        // <<< НОВОЕ: Обработка событий после сетевых операций. Возвращаемся в сон. >>>
         case FSMEvent::SEND_SUCCESS:
         case FSMEvent::SEND_FAIL:
         case FSMEvent::SYNC_SUCCESS:
         case FSMEvent::SYNC_FAIL:
             _changeState(StateType::SLEEP);
             break;
-
         default:
             break;
     }
