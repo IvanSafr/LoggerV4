@@ -21,6 +21,8 @@ FILE TREE:
 
 --- FILE: FSMManager.cpp ---
 #include "FSMManager.h"
+#include "StateFactory.h"
+#include "AppConfig.h" 
 
 FSMManager fsm;
 
@@ -86,7 +88,9 @@ StateType FSMManager::getCurrentStateType() const {
 #define FSM_MANAGER_H
 
 #include "FSM_Definitions.h"
-#include "StateFactory.h"
+// Do NOT include StateFactory.h here to avoid circular dependency
+
+class BaseState; // Forward declaration
 
 class FSMManager {
 private:
@@ -96,7 +100,7 @@ private:
 public:
     FSMManager() {}
     void init(StateType initialState);
-    void update(); // Вызывать в loop()
+    void update();
     void handleEvent(FSMEvent event);
     StateType getCurrentStateType() const;
 };
@@ -183,79 +187,138 @@ public:
 #ifndef STATE_DATA_SEND_H
 #define STATE_DATA_SEND_H
 
-#include "../FSM_Definitions.h"
+#include "FSM_Definitions.h"
 #include "AppConfig.h"
-#include "LoRaManager.h" // Ваша обертка над Ra-01
 #include <WiFi.h>
 
+// Подключаем ваши библиотеки (предполагаемые имена методов)
+#include "DataLogger.h" // Нужно будет добавить методы отправки в DataLogger
+#include "LoRa.h"       // Ваш класс работы с LoRa
+
 class State_DataSend : public BaseState {
-    bool _isFinished = false;
+private:
+    uint32_t _startTime;
+    bool _wifiAttempted = false;
+    bool _sentSuccess = false;
+
+    // Вспомогательный метод для попытки подключения WiFi (короткий таймаут)
+    bool connectWiFi() {
+        if (WiFi.status() == WL_CONNECTED) return true;
+        
+        Serial.println("DataSend: Connecting WiFi...");
+        WiFi.begin(AppConfig.ssid.c_str(), AppConfig.pass.c_str());
+        
+        uint32_t start = millis();
+        while (millis() - start < 10000) { // 10 секунд на подключение
+            if (WiFi.status() == WL_CONNECTED) return true;
+            delay(100);
+        }
+        return false;
+    }
+
+    // Логика отправки через WiFi (HTTP/MQTT)
+    bool sendViaWiFi() {
+        if (!connectWiFi()) return false;
+        
+        Serial.println("DataSend: Sending via WiFi (HTTP)...");
+        // Здесь вызов вашего метода из DataLogger или HTTPClient
+        // bool result = DataLogger.uploadToDB(); 
+        
+        // ЗАГЛУШКА для примера:
+        bool result = true; // Предположим, успешно
+        delay(500); // Симуляция отправки
+        
+        return result;
+    }
+
+    // Логика отправки через LoRa
+    void sendViaLoRa() {
+        Serial.println("DataSend: Sending via LoRa...");
+        // Инициализация LoRa, если выключена
+        // LoRa.begin(...);
+        
+        // Отправка пакета
+        // String data = DataLogger.getLastPacket();
+        // LoRa.sendPacket(data);
+        
+        delay(200); // Время на передачу
+    }
 
 public:
     void onEnter() override {
         Serial.println("FSM: -> DATA_SEND");
-        _isFinished = false;
+        _startTime = millis();
+        _wifiAttempted = false;
+        _sentSuccess = false;
 
+        // Выбор стратегии в зависимости от режима
         switch (AppConfig.mode) {
+            
+            // === NORMAL: WiFi, если нет -> LoRa ===
             case MODE_NORMAL:
-                sendNormal();
+                if (sendViaWiFi()) {
+                    Serial.println("DataSend: WiFi Success");
+                    _sentSuccess = true;
+                } else {
+                    Serial.println("DataSend: WiFi Failed -> Fallback to LoRa");
+                    sendViaLoRa();
+                    // Статус все равно считаем "успехом" для выхода, 
+                    // так как данные ушли хотя бы по LoRa
+                    _sentSuccess = true; 
+                }
                 break;
+
+            // === STANDARD: Только LoRa ===
             case MODE_STANDARD:
-                sendStandard();
+                WiFi.mode(WIFI_OFF); // Гарантируем, что WiFi выключен
+                sendViaLoRa();
+                _sentSuccess = true;
                 break;
-            case MODE_SCHEDULE:
-                sendBulk();
-                break;
+
+            // === ECO: Отправка по кнопке (обычно WiFi) ===
             case MODE_ECO:
-                // В ECO отправка только по нажатию кнопки (обрабатывается в handleEvent)
-                _isFinished = true;
+                // Если мы попали сюда, значит пользователь инициировал отправку
+                if (sendViaWiFi()) {
+                     Serial.println("DataSend: ECO Upload Success");
+                     _sentSuccess = true;
+                } else {
+                     Serial.println("DataSend: ECO Upload Failed");
+                     _sentSuccess = false;
+                }
+                break;
+
+            // === SCHEDULE: Пакетная отправка ===
+            case MODE_SCHEDULE:
+                // Логика массовой отправки
+                // sendViaLoRaBurst();
+                _sentSuccess = true;
                 break;
         }
-    }
-
-    void sendNormal() {
-        Serial.println("Sending: WiFi -> DB");
-        WiFi.begin(AppConfig.ssid, AppConfig.pass);
-        
-        // Попытка WiFi (таймаут 10 сек)
-        int attempts = 0;
-        while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-            delay(500);
-            attempts++;
-        }
-
-        if (WiFi.status() == WL_CONNECTED) {
-            // Отправка в БД (HTTP POST)
-            // if (http.post(...)) _isFinished = true;
-        } else {
-            Serial.println("WiFi Fail, switching to LoRa");
-            sendStandard(); // Резервный канал LoRa
-        }
-        _isFinished = true;
-    }
-
-    void sendStandard() {
-        // Логика LoRa Ra-01
-        DataEntry lastData = dataLogger.getLastEntry();
-        lora.sendPacket(lastData); 
-        _isFinished = true;
-    }
-
-    void sendBulk() {
-        // Отправка всех накопленных данных за X дней
-        // Цикл по памяти DataLogger
-        _isFinished = true;
     }
 
     void onUpdate() override {
-        if (_isFinished) {
+        // Поскольку в onEnter мы использовали блокирующие вызовы (для простоты),
+        // здесь мы просто проверяем завершение и выходим.
+        // В более сложной системе здесь был бы конечный автомат процесса отправки.
+        
+        extern class FSMManager fsm;
+        
+        if (_sentSuccess) {
             fsm.handleEvent(FSMEvent::SEND_SUCCESS);
+        } else {
+            fsm.handleEvent(FSMEvent::SEND_FAIL);
         }
     }
 
     void onExit() override {
+        Serial.println("FSM: <- DATA_SEND");
+        
+        // Отключаем WiFi для экономии, если не нужен
         WiFi.disconnect(true);
         WiFi.mode(WIFI_OFF);
+        
+        // LoRa в режим сна
+        LoRa.sleep();
     }
 
     StateType getType() const override { return StateType::DATA_SEND; }
@@ -284,7 +347,7 @@ public:
         _startAttemptTime = millis();
         _isSyncing = false;
 
-        WiFi.begin(AppConfig.wifi_ssid, AppConfig.wifi_pass);
+        WiFi.begin(AppConfig.ssid, AppConfig.pass);
     }
 
     void onUpdate() override {
@@ -368,59 +431,55 @@ public:
 #ifndef STATE_WORK_H
 #define STATE_WORK_H
 
-#include "../FSM_Definitions.h"
+#include "FSM_Definitions.h"
+#include "FSMManager.h" // Required for fsm.handleEvent
 #include "AppConfig.h"
-#include "DataLogger.h"
+#include "DataLogger.h"    // Required for DataEntry and dataLogger
 #include "Adafruit_AHTX0.h"
 
-// Предполагаем, что объекты сенсоров объявлены глобально или в DeviceManager
+// Define or include Pinout
+#ifndef ADC_BAT_PIN
+#define ADC_BAT_PIN 1 // Example pin, change to actual
+#endif
+
 extern Adafruit_AHTX0 aht; 
+extern DataLoggerClass dataLogger; 
 
 class State_Work : public BaseState {
 public:
     void onEnter() override {
         Serial.println("FSM: -> WORK (Measuring)");
 
-        // 1. Измерение AHT-10
         sensors_event_t humidity, temp;
+        // Ensure 'aht' is initialized in main setup
         aht.getEvent(&humidity, &temp);
 
-        // 2. Измерение АКБ (через делитель, привязанный к пину из Pinout.h)
-        // Расчет процента зависит от ваших резисторов
         float v_bat = (analogRead(ADC_BAT_PIN) * 3.3 / 4095.0) * 2.0; 
         int bat_pct = map(v_bat * 100, 330, 420, 0, 100);
         bat_pct = constrain(bat_pct, 0, 100);
 
-        // 3. Запись в логгер
-        // Структура: Время (внутреннее), Темп, Влажн, АКБ
         DataEntry entry;
-        entry.timestamp = time(nullptr); // Текущее время из RTC ESP32
+        entry.timestamp = time(nullptr);
         entry.temperature = temp.temperature;
         entry.humidity = humidity.relative_humidity;
         entry.battery = bat_pct;
         
         dataLogger.write(entry);
 
-        // Увеличиваем счетчик пробуждений в конфиге
-        appConfig.wakeCount++;
-        appConfig.save(); // Сохраняем в NVS
+        AppConfig.wakeCount++;
+        AppConfig.save(); 
 
-        // 4. Логика переходов
-        if (appConfig.wakeCount % appConfig.D == 0) {
-            fsm.handleEvent(FSMEvent::SENSOR_DONE); // В коде менеджера переключим на NET_SETUP
-        } else if (appConfig.wakeCount % appConfig.N == 0) {
-            fsm.handleEvent(FSMEvent::SENSOR_DONE); // Или на DATA_SEND
+        if (AppConfig.wakeCount % AppConfig.D_netSync == 0) {
+            fsm.handleEvent(FSMEvent::SENSOR_DONE); 
+        } else if (AppConfig.wakeCount % AppConfig.N_sendData == 0) {
+            fsm.handleEvent(FSMEvent::SENSOR_DONE); 
         } else {
-            fsm.handleEvent(FSMEvent::SENSOR_DONE); // На SLEEP
+            fsm.handleEvent(FSMEvent::SENSOR_DONE); 
         }
     }
 
-    void onUpdate() override {
-        // Логика перехода вынесена в onEnter, так как замер мгновенный
-    }
-
+    void onUpdate() override {}
     void onExit() override {}
-    
     StateType getType() const override { return StateType::WORK; }
 };
 
