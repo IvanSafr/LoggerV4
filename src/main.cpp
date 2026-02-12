@@ -4,7 +4,8 @@
 #include "AppConfig.h"
 #include "DataLogger.h"
 
-Button2 btn(0); // Кнопка на GPIO 0 (ESP32-C3)
+Button2 btn(10); // Кнопка на GPIO 0 (ESP32-C3)
+
 
 void setup() {
     Serial.begin(115200);

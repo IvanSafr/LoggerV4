@@ -8,6 +8,7 @@
 // Подключаем ваши библиотеки (предполагаемые имена методов)
 #include "DataLogger.h" // Нужно будет добавить методы отправки в DataLogger
 #include "LoRa.h"       // Ваш класс работы с LoRa
+#include "FSMManager.h"
 
 class State_DataSend : public BaseState {
 private:

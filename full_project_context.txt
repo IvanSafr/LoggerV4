@@ -1,0 +1,1979 @@
+=== PROJECT STRUCTURE ===
+Logger V4_SOFT/
+    full_project_context.txt
+    platformio.ini
+    scan.py
+    include/
+    lib/
+        AppConfig/
+            AppConfig.cpp
+            AppConfig.h
+        DataLogger/
+            DataLogger.cpp
+            DataLogger.h
+        DeviceManager/
+            DeviceManager.cpp
+            DeviceManager.h
+        DisplayUI/
+            DisplayUI.cpp
+            DisplayUI.h
+        FSM/
+            FSMManager.cpp
+            FSMManager.h
+            FSM_Definitions.h
+            ppt.py
+            StateFactory.cpp
+            StateFactory.h
+            states/
+                State_DataSend.h
+                State_NetSetup.h
+                State_ScreenOn.h
+                State_Sleep.h
+                State_Work.h
+        LoRa/
+            LoRa.cpp
+            LoRa.h
+            LoRaManager.h
+        Pinout/
+            Pinout.h
+        PowerMgr/
+    src/
+        main.cpp
+    test/
+
+==============================
+
+START OF FILE: platformio.ini
+--------------------
+; PlatformIO Project Configuration File
+;
+;   Build options: build flags, source filter
+;   Upload options: custom upload port, speed and extra flags
+;   Library options: dependencies, extra library storages
+;   Advanced options: extra scripting
+;
+; Please visit documentation for the other options and examples
+; https://docs.platformio.org/page/projectconf.html
+
+[env:esp32-c3-devkitc-02]
+platform = espressif32
+board = esp32-c3-devkitc-02
+framework = arduino
+
+--------------------
+END OF FILE: platformio.ini
+
+START OF FILE: lib\AppConfig\AppConfig.cpp
+--------------------
+#include "AppConfig.h"
+
+AppConfigClass AppConfig;
+
+void AppConfigClass::begin() {
+    prefs.begin(NAMESPACE, false); // false = read/write
+
+    // Check for initialization key. If missing, apply factory defaults.
+    if (!prefs.isKey("init_done")) {
+        Serial.println("Config: First run detected, applying defaults...");
+        resetToFactory();
+        prefs.putBool("init_done", true);
+    } else {
+        load();
+    }
+}
+
+void AppConfigClass::resetToFactory() {
+    // Default values assignment
+    deviceId = "ESP32_SENSOR_001";
+    mode = MODE_NORMAL;
+    wakeCount = 0;
+
+    T_sleepSeconds = 600;  // 10 minutes
+    D_netSync = 6;         // Every hour (if T=600s)
+    N_sendData = 1;        // Every wake-up
+    A_screenTime = 10;     // 10 seconds
+
+    X_schedInterval = 86400; // 24 hours
+    Y_burstCount = 5;
+    Z_burstDuration = 600;
+
+    ssid = "Your_SSID";
+    pass = "Your_PASS";
+    loraFrequency = 433E6;
+
+    save(); // Persist defaults immediately
+}
+
+void AppConfigClass::load() {
+    // Load variables with fallback defaults
+    deviceId = prefs.getString("dev_id", "ESP_DEF");
+    mode = prefs.getUChar("mode", MODE_NORMAL);
+    wakeCount = prefs.getUInt("wake_cnt", 0);
+
+    T_sleepSeconds = prefs.getUInt("T_sleep", 600);
+    D_netSync = prefs.getUInt("D_sync", 6);
+    N_sendData = prefs.getUInt("N_send", 1);
+    A_screenTime = prefs.getUInt("A_scr", 10);
+
+    X_schedInterval = prefs.getUInt("X_sched", 86400);
+    Y_burstCount = prefs.getUInt("Y_burst", 5);
+    Z_burstDuration = prefs.getUInt("Z_dur", 600);
+
+    ssid = prefs.getString("ssid", "");
+    pass = prefs.getString("pass", "");
+    loraFrequency = prefs.getLong("lora_freq", 433E6);
+
+    Serial.println("Config: Loaded from NVS");
+}
+
+void AppConfigClass::save() {
+    prefs.putString("dev_id", deviceId);
+    prefs.putUChar("mode", mode);
+    prefs.putUInt("wake_cnt", wakeCount);
+
+    prefs.putUInt("T_sleep", T_sleepSeconds);
+    prefs.putUInt("D_sync", D_netSync);
+    prefs.putUInt("N_send", N_sendData);
+    prefs.putUInt("A_scr", A_screenTime);
+
+    prefs.putUInt("X_sched", X_schedInterval);
+    prefs.putUInt("Y_burst", Y_burstCount);
+    prefs.putUInt("Z_dur", Z_burstDuration);
+
+    prefs.putString("ssid", ssid);
+    prefs.putString("pass", pass);
+    prefs.putLong("lora_freq", loraFrequency);
+
+    Serial.println("Config: Saved to NVS");
+}
+
+void AppConfigClass::setWifi(String newSsid, String newPass) {
+    ssid = newSsid;
+    pass = newPass;
+    save();
+}
+
+void AppConfigClass::printConfig() {
+    Serial.println("=== Configuration ===");
+    Serial.printf("Device ID: %s\n", deviceId.c_str());
+    Serial.printf("Mode: %d (0=ECO, 1=NORM, 2=STD, 3=SCH)\n", mode);
+    Serial.printf("Wake Count: %u\n", wakeCount);
+    Serial.printf("T (Sleep): %u s\n", T_sleepSeconds);
+    Serial.printf("D (Sync every): %u wakes\n", D_netSync);
+    Serial.printf("N (Send every): %u wakes\n", N_sendData);
+    Serial.printf("A (Screen): %u s\n", A_screenTime);
+    Serial.printf("WiFi SSID: %s\n", ssid.c_str());
+    Serial.println("=====================");
+}
+--------------------
+END OF FILE: lib\AppConfig\AppConfig.cpp
+
+START OF FILE: lib\AppConfig\AppConfig.h
+--------------------
+#ifndef APP_CONFIG_H
+#define APP_CONFIG_H
+
+#include <Arduino.h>
+#include <Preferences.h>
+
+// Operating modes
+enum WorkMode {
+    MODE_ECO = 0,      // WiFi only via button, data collection only
+    MODE_NORMAL = 1,   // Immediate transmission (WiFi -> LoRa backup)
+    MODE_STANDARD = 2, // LoRa only (periodic)
+    MODE_SCHEDULE = 3  // Collection -> Bulk transmission via schedule
+};
+
+class AppConfigClass {
+private:
+    Preferences prefs;
+    const char* NAMESPACE = "sensor_conf";
+
+public:
+    // === Configuration Variables ===
+
+    // Device Identification
+    String deviceId;          
+    uint8_t mode;             // Operating mode (previously workMode)
+    uint32_t wakeCount;       // Counter for wake-up cycles (Added for State_Work logic)
+
+    // Timing and Intervals
+    uint32_t T_sleepSeconds;  // T: Sleep duration in seconds
+    uint32_t D_netSync;       // D: Sync time every D wake-ups
+    uint32_t N_sendData;      // N: Send data every N wake-ups
+    uint32_t A_screenTime;    // A: Display active time in seconds
+
+    // Schedule Mode Settings
+    uint32_t X_schedInterval; // X: Bulk upload interval (seconds)
+    uint32_t Y_burstCount;    // Y: Number of transmissions per hour
+    uint32_t Z_burstDuration; // Z: Duration of communication session
+
+    // Network Settings
+    String ssid;              // WiFi SSID (Renamed to match State usage)
+    String pass;              // WiFi Password (Renamed to match State usage)
+
+    // LoRa Settings
+    long loraFrequency; 
+
+    // === Methods ===
+
+    void begin();             // Initialize and load from NVS
+    void load();              // Load variables from NVS
+    void save();              // Save current variables to NVS
+    void resetToFactory();    // Reset to default values
+
+    // Diagnostics
+    void printConfig();       
+
+    // Utility
+    void setWifi(String newSsid, String newPass);
+};
+
+extern AppConfigClass AppConfig;
+
+#endif
+--------------------
+END OF FILE: lib\AppConfig\AppConfig.h
+
+START OF FILE: lib\DataLogger\DataLogger.cpp
+--------------------
+#include "DataLogger.h"
+
+DataLoggerClass dataLogger;
+
+bool DataLoggerClass::begin() {
+    // Монтируем файловую систему. Если не форматирована — форматируем.
+    if (!LittleFS.begin(true)) {
+        Serial.println("DataLogger: LittleFS Mount Failed");
+        return false;
+    }
+    return true;
+}
+
+bool DataLoggerClass::write(const DataEntry& entry) {
+    // Открываем файл для ДОЗАПИСИ ("a" - append)
+    File file = LittleFS.open(_filename, "a");
+    if (!file) {
+        Serial.println("DataLogger: Failed to open file for appending");
+        return false;
+    }
+
+    // Пишем сырые байты структуры
+    size_t written = file.write((uint8_t*)&entry, sizeof(DataEntry));
+    file.close();
+
+    if (written != sizeof(DataEntry)) {
+        Serial.println("DataLogger: Write failed/incomplete");
+        return false;
+    }
+    
+    Serial.printf("DataLogger: Saved entry. TS: %u, Temp: %.2f\n", entry.timestamp, entry.temperature);
+    return true;
+}
+
+size_t DataLoggerClass::getCount() {
+    if (!LittleFS.exists(_filename)) return 0;
+
+    File file = LittleFS.open(_filename, "r");
+    if (!file) return 0;
+
+    size_t size = file.size();
+    file.close();
+
+    // Количество записей = размер файла / размер одной структуры
+    return size / sizeof(DataEntry);
+}
+
+bool DataLoggerClass::read(size_t index, DataEntry& outEntry) {
+    File file = LittleFS.open(_filename, "r");
+    if (!file) return false;
+
+    // Смещаем курсор на нужную позицию: index * 13 байт
+    size_t position = index * sizeof(DataEntry);
+    
+    if (position >= file.size()) {
+        file.close();
+        return false; // Индекс за пределами файла
+    }
+
+    file.seek(position);
+    size_t readBytes = file.read((uint8_t*)&outEntry, sizeof(DataEntry));
+    file.close();
+
+    return (readBytes == sizeof(DataEntry));
+}
+
+size_t DataLoggerClass::getFileSize() {
+    if (!LittleFS.exists(_filename)) return 0;
+    File file = LittleFS.open(_filename, "r");
+    size_t size = file.size();
+    file.close();
+    return size;
+}
+
+void DataLoggerClass::clear() {
+    if (LittleFS.exists(_filename)) {
+        LittleFS.remove(_filename);
+        Serial.println("DataLogger: Log file cleared");
+    }
+}
+--------------------
+END OF FILE: lib\DataLogger\DataLogger.cpp
+
+START OF FILE: lib\DataLogger\DataLogger.h
+--------------------
+#ifndef DATA_LOGGER_H
+#define DATA_LOGGER_H
+
+#include <Arduino.h>
+#include <FS.h>
+#include <LittleFS.h> // Рекомендуется вместо SPIFFS для ESP32
+#include <time.h>
+
+// Имя файла для логирования
+#define LOG_FILENAME "/log.bin"
+
+// Структура данных. 
+// __attribute__((packed)) гарантирует, что компилятор не добавит пустых байтов для выравнивания.
+// Размер записи будет жестко фиксирован: 4+4+4+1 = 13 байт.
+struct __attribute__((packed)) DataEntry {
+    uint32_t timestamp; // Unix время
+    float temperature;
+    float humidity;
+    uint8_t battery;    // Заряд в %
+};
+
+class DataLoggerClass {
+public:
+    // Инициализация файловой системы
+    bool begin();
+
+    // Запись одной структуры в конец файла
+    bool write(const DataEntry& entry);
+
+    // Чтение записи по индексу (0 - самая старая)
+    bool read(size_t index, DataEntry& outEntry);
+
+    // Получить количество записей в файле
+    size_t getCount();
+
+    // Удалить файл лога (вызывается после успешной отправки)
+    void clear();
+
+    // Получить размер файла в байтах
+    size_t getFileSize();
+
+private:
+    const char* _filename = LOG_FILENAME;
+};
+
+// Объявляем глобальный экземпляр, чтобы он был виден в State_Work и других файлах
+extern DataLoggerClass dataLogger;
+
+#endif
+--------------------
+END OF FILE: lib\DataLogger\DataLogger.h
+
+START OF FILE: lib\DeviceManager\DeviceManager.cpp
+--------------------
+
+--------------------
+END OF FILE: lib\DeviceManager\DeviceManager.cpp
+
+START OF FILE: lib\DeviceManager\DeviceManager.h
+--------------------
+
+--------------------
+END OF FILE: lib\DeviceManager\DeviceManager.h
+
+START OF FILE: lib\DisplayUI\DisplayUI.cpp
+--------------------
+
+--------------------
+END OF FILE: lib\DisplayUI\DisplayUI.cpp
+
+START OF FILE: lib\DisplayUI\DisplayUI.h
+--------------------
+#ifndef __DISPLAY_UI__
+#define __DISPLAY_UI__
+
+
+void show_screen (){
+
+    
+}
+
+#endif
+--------------------
+END OF FILE: lib\DisplayUI\DisplayUI.h
+
+START OF FILE: lib\FSM\FSMManager.cpp
+--------------------
+#include "FSMManager.h"
+#include "StateFactory.h"
+#include "AppConfig.h" 
+
+FSMManager fsm;
+
+void FSMManager::init(StateType initialState) {
+    _changeState(initialState);
+}
+
+void FSMManager::update() {
+    if (_currentState) {
+        _currentState->onUpdate();
+    }
+}
+
+void FSMManager::_changeState(StateType type) {
+    if (_currentState) {
+        if (_currentState->getType() == type) return;
+        _currentState->onExit();
+        delete _currentState; // Освобождаем память старого состояния
+    }
+
+    _currentState = StateFactory::createState(type);
+    
+    if (_currentState) {
+        _currentState->onEnter();
+    }
+}
+
+void FSMManager::handleEvent(FSMEvent event) {
+    if (!_currentState) return;
+
+    StateType current = _currentState->getType();
+
+    // Глобальная логика переходов
+    switch (event) {
+        case FSMEvent::BTN_SHORT:
+            if (current == StateType::SLEEP) _changeState(StateType::SCREEN_ON);
+            else if (current == StateType::SCREEN_ON) {
+                // В SCREEN_ON короткое нажатие просто меняет индекс экрана внутри DisplayUI
+                // Но если это 3-й экран, можно вернуться в SLEEP или сбросить таймер
+            }
+            break;
+
+        case FSMEvent::TIMEOUT:
+            if (current == StateType::SCREEN_ON) _changeState(StateType::SLEEP);
+            break;
+
+        case FSMEvent::SENSOR_DONE:
+            // После измерения решаем: слать данные или спать
+            _changeState(StateType::SLEEP); 
+            break;
+            
+        default:
+            break;
+    }
+}
+
+StateType FSMManager::getCurrentStateType() const {
+    return _currentState ? _currentState->getType() : StateType::NONE;
+}
+--------------------
+END OF FILE: lib\FSM\FSMManager.cpp
+
+START OF FILE: lib\FSM\FSMManager.h
+--------------------
+#ifndef FSM_MANAGER_H
+#define FSM_MANAGER_H
+
+#include "FSM_Definitions.h"
+// Do NOT include StateFactory.h here to avoid circular dependency
+
+class BaseState; // Forward declaration
+
+class FSMManager {
+private:
+    BaseState* _currentState = nullptr;
+    void _changeState(StateType type);
+
+public:
+    FSMManager() {}
+    void init(StateType initialState);
+    void update();
+    void handleEvent(FSMEvent event);
+    StateType getCurrentStateType() const;
+};
+
+extern FSMManager fsm;
+
+#endif
+--------------------
+END OF FILE: lib\FSM\FSMManager.h
+
+START OF FILE: lib\FSM\FSM_Definitions.h
+--------------------
+#ifndef FSM_DEFINITIONS_H
+#define FSM_DEFINITIONS_H
+
+#include <Arduino.h>
+
+enum class StateType {
+    SLEEP,
+    SCREEN_ON,
+    WORK,
+    DATA_SEND,
+    NET_SETUP,
+    NONE
+};
+
+enum class FSMEvent {
+    BTN_SHORT,
+    BTN_LONG,
+    BTN_DOUBLE,
+    SENSOR_DONE,
+    SEND_SUCCESS,
+    SEND_FAIL,
+    SYNC_SUCCESS, // Время успешно получено
+    SYNC_FAIL,
+    TIMEOUT
+};
+
+// Интерфейс состояния
+class BaseState {
+public:
+    virtual ~BaseState() {}
+    virtual void onEnter() = 0;
+    virtual void onUpdate() = 0; // Тик
+    virtual void onExit() = 0;
+    virtual StateType getType() const = 0;
+};
+
+#endif
+--------------------
+END OF FILE: lib\FSM\FSM_Definitions.h
+
+START OF FILE: lib\FSM\ppt.py
+--------------------
+import os
+
+# --- НАСТРОЙКИ ---
+# Папки, которые нужно пропустить
+EXCLUDE_DIRS = {'.pio', '.vscode', '.git', '__pycache__', 'test', "Adafruit_AHTX0", "Adafruit_GFX", "Adafruit_lib", "Adafruit_SSD1306", "btn"}
+# Расширения файлов, которые нужно включить
+INCLUDE_EXTENSIONS = {'.h', '.cpp', '.c', '.ini', '.txt'}
+# Имя выходного файла
+OUTPUT_FILE = 'project_context.txt'
+
+def generate_context(root_dir):
+    with open(OUTPUT_FILE, 'w', encoding='utf-8') as out_f:
+        out_f.write(f"PROJECT STRUCTURE AND SOURCE CODE\n")
+        out_f.write(f"Generated from: {os.path.abspath(root_dir)}\n")
+        out_f.write("="*50 + "\n\n")
+
+        # 1. Сначала записываем дерево файлов (для понимания структуры)
+        out_f.write("FILE TREE:\n")
+        for root, dirs, files in os.walk(root_dir):
+            dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS]
+            level = root.replace(root_dir, '').count(os.sep)
+            indent = ' ' * 4 * level
+            out_f.write(f"{indent}{os.path.basename(root)}/\n")
+            sub_indent = ' ' * 4 * (level + 1)
+            for f in files:
+                if any(f.endswith(ext) for ext in INCLUDE_EXTENSIONS):
+                    out_f.write(f"{sub_indent}{f}\n")
+        
+        out_f.write("\n" + "="*50 + "\n\n")
+
+        # 2. Затем записываем содержимое каждого файла
+        for root, dirs, files in os.walk(root_dir):
+            dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS]
+            
+            for file in files:
+                if any(file.endswith(ext) for ext in INCLUDE_EXTENSIONS):
+                    file_path = os.path.join(root, file)
+                    relative_path = os.path.relpath(file_path, root_dir)
+                    
+                    out_f.write(f"--- FILE: {relative_path} ---\n")
+                    try:
+                        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                            out_f.write(f.read())
+                    except Exception as e:
+                        out_f.write(f"[Error reading file: {e}]")
+                    
+                    out_f.write("\n\n")
+
+    print(f"Готово! Контекст сохранен в файл: {OUTPUT_FILE}")
+
+if __name__ == "__main__":
+    # Запускаем в текущей директории
+    generate_context('.')
+--------------------
+END OF FILE: lib\FSM\ppt.py
+
+START OF FILE: lib\FSM\StateFactory.cpp
+--------------------
+#include "StateFactory.h"
+#include "states/State_Sleep.h"
+#include "states/State_Work.h"
+#include "states/State_ScreenOn.h"
+#include "states/State_DataSend.h"
+#include "states/State_NetSetup.h"
+
+BaseState* StateFactory::createState(StateType type) {
+    switch (type) {
+        case StateType::SLEEP:     return new State_Sleep();
+        case StateType::WORK:      return new State_Work();
+        case StateType::SCREEN_ON: return new State_ScreenOn();
+        case StateType::DATA_SEND: return new State_DataSend();
+        case StateType::NET_SETUP: return new State_NetSetup();
+        default: return nullptr;
+    }
+}
+--------------------
+END OF FILE: lib\FSM\StateFactory.cpp
+
+START OF FILE: lib\FSM\StateFactory.h
+--------------------
+#ifndef STATE_FACTORY_H
+#define STATE_FACTORY_H
+
+#include "FSM_Definitions.h"
+
+class StateFactory {
+public:
+    static BaseState* createState(StateType type);
+};
+
+#endif
+--------------------
+END OF FILE: lib\FSM\StateFactory.h
+
+START OF FILE: lib\FSM\states\State_DataSend.h
+--------------------
+#ifndef STATE_DATA_SEND_H
+#define STATE_DATA_SEND_H
+
+#include "FSM_Definitions.h"
+#include "AppConfig.h"
+#include <WiFi.h>
+
+// Подключаем ваши библиотеки (предполагаемые имена методов)
+#include "DataLogger.h" // Нужно будет добавить методы отправки в DataLogger
+#include "LoRa.h"       // Ваш класс работы с LoRa
+#include "FSMManager.h"
+
+class State_DataSend : public BaseState {
+private:
+    uint32_t _startTime;
+    bool _wifiAttempted = false;
+    bool _sentSuccess = false;
+
+    // Вспомогательный метод для попытки подключения WiFi (короткий таймаут)
+    bool connectWiFi() {
+        if (WiFi.status() == WL_CONNECTED) return true;
+        
+        Serial.println("DataSend: Connecting WiFi...");
+        WiFi.begin(AppConfig.ssid.c_str(), AppConfig.pass.c_str());
+        
+        uint32_t start = millis();
+        while (millis() - start < 10000) { // 10 секунд на подключение
+            if (WiFi.status() == WL_CONNECTED) return true;
+            delay(100);
+        }
+        return false;
+    }
+
+    // Логика отправки через WiFi (HTTP/MQTT)
+    bool sendViaWiFi() {
+        if (!connectWiFi()) return false;
+        
+        Serial.println("DataSend: Sending via WiFi (HTTP)...");
+        // Здесь вызов вашего метода из DataLogger или HTTPClient
+        // bool result = DataLogger.uploadToDB(); 
+        
+        // ЗАГЛУШКА для примера:
+        bool result = true; // Предположим, успешно
+        delay(500); // Симуляция отправки
+        
+        return result;
+    }
+
+    // Логика отправки через LoRa
+    void sendViaLoRa() {
+        Serial.println("DataSend: Sending via LoRa...");
+        // Инициализация LoRa, если выключена
+        // LoRa.begin(...);
+        
+        // Отправка пакета
+        // String data = DataLogger.getLastPacket();
+        // LoRa.sendPacket(data);
+        
+        delay(200); // Время на передачу
+    }
+
+public:
+    void onEnter() override {
+        Serial.println("FSM: -> DATA_SEND");
+        _startTime = millis();
+        _wifiAttempted = false;
+        _sentSuccess = false;
+
+        // Выбор стратегии в зависимости от режима
+        switch (AppConfig.mode) {
+            
+            // === NORMAL: WiFi, если нет -> LoRa ===
+            case MODE_NORMAL:
+                if (sendViaWiFi()) {
+                    Serial.println("DataSend: WiFi Success");
+                    _sentSuccess = true;
+                } else {
+                    Serial.println("DataSend: WiFi Failed -> Fallback to LoRa");
+                    sendViaLoRa();
+                    // Статус все равно считаем "успехом" для выхода, 
+                    // так как данные ушли хотя бы по LoRa
+                    _sentSuccess = true; 
+                }
+                break;
+
+            // === STANDARD: Только LoRa ===
+            case MODE_STANDARD:
+                WiFi.mode(WIFI_OFF); // Гарантируем, что WiFi выключен
+                sendViaLoRa();
+                _sentSuccess = true;
+                break;
+
+            // === ECO: Отправка по кнопке (обычно WiFi) ===
+            case MODE_ECO:
+                // Если мы попали сюда, значит пользователь инициировал отправку
+                if (sendViaWiFi()) {
+                     Serial.println("DataSend: ECO Upload Success");
+                     _sentSuccess = true;
+                } else {
+                     Serial.println("DataSend: ECO Upload Failed");
+                     _sentSuccess = false;
+                }
+                break;
+
+            // === SCHEDULE: Пакетная отправка ===
+            case MODE_SCHEDULE:
+                // Логика массовой отправки
+                // sendViaLoRaBurst();
+                _sentSuccess = true;
+                break;
+        }
+    }
+
+    void onUpdate() override {
+        // Поскольку в onEnter мы использовали блокирующие вызовы (для простоты),
+        // здесь мы просто проверяем завершение и выходим.
+        // В более сложной системе здесь был бы конечный автомат процесса отправки.
+        
+        extern class FSMManager fsm;
+        
+        if (_sentSuccess) {
+            fsm.handleEvent(FSMEvent::SEND_SUCCESS);
+        } else {
+            fsm.handleEvent(FSMEvent::SEND_FAIL);
+        }
+    }
+
+    void onExit() override {
+        Serial.println("FSM: <- DATA_SEND");
+        
+        // Отключаем WiFi для экономии, если не нужен
+        WiFi.disconnect(true);
+        WiFi.mode(WIFI_OFF);
+        
+        // LoRa в режим сна
+        LoRa.sleep();
+    }
+
+    StateType getType() const override { return StateType::DATA_SEND; }
+};
+
+#endif
+--------------------
+END OF FILE: lib\FSM\states\State_DataSend.h
+
+START OF FILE: lib\FSM\states\State_NetSetup.h
+--------------------
+#ifndef STATE_NET_SETUP_H
+#define STATE_NET_SETUP_H
+
+#include "FSM_Definitions.h"
+#include <WiFi.h>
+#include "time.h"
+#include "AppConfig.h" // Предполагаем, что тут хранятся SSID и PASS
+
+class State_NetSetup : public BaseState {
+private:
+    uint32_t _startAttemptTime;
+    const uint32_t _timeout = 15000; // 15 секунд на попытку подключения
+    bool _isSyncing = false;
+
+public:
+    void onEnter() override {
+        Serial.println("FSM: -> NET_SETUP (WiFi connecting...)");
+        _startAttemptTime = millis();
+        _isSyncing = false;
+
+        WiFi.begin(AppConfig.ssid, AppConfig.pass);
+    }
+
+    void onUpdate() override {
+        // 1. Проверка статуса подключения
+        if (WiFi.status() == WL_CONNECTED) {
+            if (!_isSyncing) {
+                Serial.println("WiFi Connected. Syncing NTP...");
+                configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+                _isSyncing = true;
+            }
+
+            // Проверяем, получено ли системное время (год > 1970)
+            struct tm timeinfo;
+            if (getLocalTime(&timeinfo)) {
+                Serial.println("Time Synchronized!");
+                // Сообщаем менеджеру об успехе
+                extern class FSMManager fsm; 
+                fsm.handleEvent(FSMEvent::SYNC_SUCCESS);
+            }
+        }
+
+        // 2. Проверка тайм-аута (если WiFi не подключился за 15 сек)
+        if (millis() - _startAttemptTime > _timeout) {
+            Serial.println("WiFi Timeout!");
+            extern class FSMManager fsm;
+            fsm.handleEvent(FSMEvent::SYNC_FAIL);
+        }
+    }
+
+    void onExit() override {
+        Serial.println("FSM: <- NET_SETUP (Turning WiFi off)");
+        WiFi.disconnect(true);
+        WiFi.mode(WIFI_OFF); // Важно для энергосбережения
+    }
+
+    StateType getType() const override { return StateType::NET_SETUP; }
+};
+
+#endif
+--------------------
+END OF FILE: lib\FSM\states\State_NetSetup.h
+
+START OF FILE: lib\FSM\states\State_ScreenOn.h
+--------------------
+#ifndef STATE_SCREEN_H
+#define STATE_SCREEN_H
+
+#include "FSM_Definitions.h"
+
+class State_ScreenOn : public BaseState {
+    uint32_t _startTime;
+public:
+    void onEnter() override {
+        _startTime = millis();
+        Serial.println("FSM: -> SCREEN_ON");
+        // Display.show();
+    }
+    void onUpdate() override {
+        // Если прошло больше А секунд (берем из конфига)
+        // if (millis() - _startTime > AppConfig.A * 1000) { ... }
+    }
+    void onExit() override { /* Display.hide(); */ }
+    StateType getType() const override { return StateType::SCREEN_ON; }
+};
+
+#endif
+--------------------
+END OF FILE: lib\FSM\states\State_ScreenOn.h
+
+START OF FILE: lib\FSM\states\State_Sleep.h
+--------------------
+#include "FSM_Definitions.h"
+
+class State_Sleep : public BaseState {
+public:
+    void onEnter() override { 
+        Serial.println("FSM: -> SLEEP (Entering Light Sleep)"); 
+        // Настройка пробуждения по таймеру T и по кнопке
+        // esp_light_sleep_start();
+    }
+    void onUpdate() override {} 
+    void onExit() override { Serial.println("FSM: <- SLEEP (Waking up)"); }
+    StateType getType() const override { return StateType::SLEEP; }
+};
+--------------------
+END OF FILE: lib\FSM\states\State_Sleep.h
+
+START OF FILE: lib\FSM\states\State_Work.h
+--------------------
+#ifndef STATE_WORK_H
+#define STATE_WORK_H
+
+#include "FSM_Definitions.h"
+#include "FSMManager.h" // Required for fsm.handleEvent
+#include "AppConfig.h"
+#include "DataLogger.h"    // Required for DataEntry and dataLogger
+#include "Adafruit_AHTX0.h"
+
+// Define or include Pinout
+#ifndef ADC_BAT_PIN
+#define ADC_BAT_PIN 1 // Example pin, change to actual
+#endif
+
+extern Adafruit_AHTX0 aht; 
+extern DataLoggerClass dataLogger; 
+
+class State_Work : public BaseState {
+public:
+    void onEnter() override {
+        Serial.println("FSM: -> WORK (Measuring)");
+
+        sensors_event_t humidity, temp;
+        // Ensure 'aht' is initialized in main setup
+        aht.getEvent(&humidity, &temp);
+
+        float v_bat = (analogRead(ADC_BAT_PIN) * 3.3 / 4095.0) * 2.0; 
+        int bat_pct = map(v_bat * 100, 330, 420, 0, 100);
+        bat_pct = constrain(bat_pct, 0, 100);
+
+        DataEntry entry;
+        entry.timestamp = time(nullptr);
+        entry.temperature = temp.temperature;
+        entry.humidity = humidity.relative_humidity;
+        entry.battery = bat_pct;
+        
+        dataLogger.write(entry);
+
+        AppConfig.wakeCount++;
+        AppConfig.save(); 
+
+        if (AppConfig.wakeCount % AppConfig.D_netSync == 0) {
+            fsm.handleEvent(FSMEvent::SENSOR_DONE); 
+        } else if (AppConfig.wakeCount % AppConfig.N_sendData == 0) {
+            fsm.handleEvent(FSMEvent::SENSOR_DONE); 
+        } else {
+            fsm.handleEvent(FSMEvent::SENSOR_DONE); 
+        }
+    }
+
+    void onUpdate() override {}
+    void onExit() override {}
+    StateType getType() const override { return StateType::WORK; }
+};
+
+#endif
+--------------------
+END OF FILE: lib\FSM\states\State_Work.h
+
+START OF FILE: lib\LoRa\LoRa.cpp
+--------------------
+// Copyright (c) Sandeep Mistry. All rights reserved.
+// Licensed under the MIT license. See LICENSE file in the project root for full license information.
+
+#include <LoRa.h>
+
+// registers
+#define REG_FIFO                 0x00
+#define REG_OP_MODE              0x01
+#define REG_FRF_MSB              0x06
+#define REG_FRF_MID              0x07
+#define REG_FRF_LSB              0x08
+#define REG_PA_CONFIG            0x09
+#define REG_OCP                  0x0b
+#define REG_LNA                  0x0c
+#define REG_FIFO_ADDR_PTR        0x0d
+#define REG_FIFO_TX_BASE_ADDR    0x0e
+#define REG_FIFO_RX_BASE_ADDR    0x0f
+#define REG_FIFO_RX_CURRENT_ADDR 0x10
+#define REG_IRQ_FLAGS            0x12
+#define REG_RX_NB_BYTES          0x13
+#define REG_PKT_SNR_VALUE        0x19
+#define REG_PKT_RSSI_VALUE       0x1a
+#define REG_RSSI_VALUE           0x1b
+#define REG_MODEM_CONFIG_1       0x1d
+#define REG_MODEM_CONFIG_2       0x1e
+#define REG_PREAMBLE_MSB         0x20
+#define REG_PREAMBLE_LSB         0x21
+#define REG_PAYLOAD_LENGTH       0x22
+#define REG_MODEM_CONFIG_3       0x26
+#define REG_FREQ_ERROR_MSB       0x28
+#define REG_FREQ_ERROR_MID       0x29
+#define REG_FREQ_ERROR_LSB       0x2a
+#define REG_RSSI_WIDEBAND        0x2c
+#define REG_DETECTION_OPTIMIZE   0x31
+#define REG_INVERTIQ             0x33
+#define REG_DETECTION_THRESHOLD  0x37
+#define REG_SYNC_WORD            0x39
+#define REG_INVERTIQ2            0x3b
+#define REG_DIO_MAPPING_1        0x40
+#define REG_VERSION              0x42
+#define REG_PA_DAC               0x4d
+
+// modes
+#define MODE_LONG_RANGE_MODE     0x80
+#define MODE_SLEEP               0x00
+#define MODE_STDBY               0x01
+#define MODE_TX                  0x03
+#define MODE_RX_CONTINUOUS       0x05
+#define MODE_RX_SINGLE           0x06
+#define MODE_CAD                 0x07
+
+// PA config
+#define PA_BOOST                 0x80
+
+// IRQ masks
+#define IRQ_TX_DONE_MASK           0x08
+#define IRQ_PAYLOAD_CRC_ERROR_MASK 0x20
+#define IRQ_RX_DONE_MASK           0x40
+#define IRQ_CAD_DONE_MASK          0x04
+#define IRQ_CAD_DETECTED_MASK      0x01
+
+#define RF_MID_BAND_THRESHOLD    525E6
+#define RSSI_OFFSET_HF_PORT      157
+#define RSSI_OFFSET_LF_PORT      164
+
+#define MAX_PKT_LENGTH           255
+
+#if (ESP8266 || ESP32)
+    #define ISR_PREFIX ICACHE_RAM_ATTR
+#else
+    #define ISR_PREFIX
+#endif
+
+LoRaClass::LoRaClass() :
+  _spiSettings(LORA_DEFAULT_SPI_FREQUENCY, MSBFIRST, SPI_MODE0),
+  _spi(&LORA_DEFAULT_SPI),
+  _ss(LORA_DEFAULT_SS_PIN), _reset(LORA_DEFAULT_RESET_PIN), _dio0(LORA_DEFAULT_DIO0_PIN),
+  _frequency(0),
+  _packetIndex(0),
+  _implicitHeaderMode(0),
+  _onReceive(NULL),
+  _onCadDone(NULL),
+  _onTxDone(NULL)
+{
+  // overide Stream timeout value
+  setTimeout(0);
+}
+
+int LoRaClass::begin(long frequency)
+{
+#if defined(ARDUINO_SAMD_MKRWAN1300) || defined(ARDUINO_SAMD_MKRWAN1310)
+  pinMode(LORA_IRQ_DUMB, OUTPUT);
+  digitalWrite(LORA_IRQ_DUMB, LOW);
+
+  // Hardware reset
+  pinMode(LORA_BOOT0, OUTPUT);
+  digitalWrite(LORA_BOOT0, LOW);
+
+  pinMode(LORA_RESET, OUTPUT);
+  digitalWrite(LORA_RESET, HIGH);
+  delay(200);
+  digitalWrite(LORA_RESET, LOW);
+  delay(200);
+  digitalWrite(LORA_RESET, HIGH);
+  delay(50);
+#endif
+
+  // setup pins
+  pinMode(_ss, OUTPUT);
+  // set SS high
+  digitalWrite(_ss, HIGH);
+
+  if (_reset != -1) {
+    pinMode(_reset, OUTPUT);
+
+    // perform reset
+    digitalWrite(_reset, LOW);
+    delay(10);
+    digitalWrite(_reset, HIGH);
+    delay(10);
+  }
+
+  // start SPI
+  _spi->begin();
+
+  // check version
+  uint8_t version = readRegister(REG_VERSION);
+  if (version != 0x12) {
+    return 0;
+  }
+
+  // put in sleep mode
+  sleep();
+
+  // set frequency
+  setFrequency(frequency);
+
+  // set base addresses
+  writeRegister(REG_FIFO_TX_BASE_ADDR, 0);
+  writeRegister(REG_FIFO_RX_BASE_ADDR, 0);
+
+  // set LNA boost
+  writeRegister(REG_LNA, readRegister(REG_LNA) | 0x03);
+
+  // set auto AGC
+  writeRegister(REG_MODEM_CONFIG_3, 0x04);
+
+  // set output power to 17 dBm
+  setTxPower(17);
+
+  // put in standby mode
+  idle();
+
+  return 1;
+}
+
+void LoRaClass::end()
+{
+  // put in sleep mode
+  sleep();
+
+  // stop SPI
+  _spi->end();
+}
+
+int LoRaClass::beginPacket(int implicitHeader)
+{
+  if (isTransmitting()) {
+    return 0;
+  }
+
+  // put in standby mode
+  idle();
+
+  if (implicitHeader) {
+    implicitHeaderMode();
+  } else {
+    explicitHeaderMode();
+  }
+
+  // reset FIFO address and paload length
+  writeRegister(REG_FIFO_ADDR_PTR, 0);
+  writeRegister(REG_PAYLOAD_LENGTH, 0);
+
+  return 1;
+}
+
+int LoRaClass::endPacket(bool async)
+{
+  
+  if ((async) && (_onTxDone))
+      writeRegister(REG_DIO_MAPPING_1, 0x40); // DIO0 => TXDONE
+
+  // put in TX mode
+  writeRegister(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_TX);
+
+  if (!async) {
+    // wait for TX done
+    while ((readRegister(REG_IRQ_FLAGS) & IRQ_TX_DONE_MASK) == 0) {
+      yield();
+    }
+    // clear IRQ's
+    writeRegister(REG_IRQ_FLAGS, IRQ_TX_DONE_MASK);
+  }
+
+  return 1;
+}
+
+bool LoRaClass::isTransmitting()
+{
+  if ((readRegister(REG_OP_MODE) & MODE_TX) == MODE_TX) {
+    return true;
+  }
+
+  if (readRegister(REG_IRQ_FLAGS) & IRQ_TX_DONE_MASK) {
+    // clear IRQ's
+    writeRegister(REG_IRQ_FLAGS, IRQ_TX_DONE_MASK);
+  }
+
+  return false;
+}
+
+int LoRaClass::parsePacket(int size)
+{
+  int packetLength = 0;
+  int irqFlags = readRegister(REG_IRQ_FLAGS);
+
+  if (size > 0) {
+    implicitHeaderMode();
+
+    writeRegister(REG_PAYLOAD_LENGTH, size & 0xff);
+  } else {
+    explicitHeaderMode();
+  }
+
+  // clear IRQ's
+  writeRegister(REG_IRQ_FLAGS, irqFlags);
+
+  if ((irqFlags & IRQ_RX_DONE_MASK) && (irqFlags & IRQ_PAYLOAD_CRC_ERROR_MASK) == 0) {
+    // received a packet
+    _packetIndex = 0;
+
+    // read packet length
+    if (_implicitHeaderMode) {
+      packetLength = readRegister(REG_PAYLOAD_LENGTH);
+    } else {
+      packetLength = readRegister(REG_RX_NB_BYTES);
+    }
+
+    // set FIFO address to current RX address
+    writeRegister(REG_FIFO_ADDR_PTR, readRegister(REG_FIFO_RX_CURRENT_ADDR));
+
+    // put in standby mode
+    idle();
+  } else if (readRegister(REG_OP_MODE) != (MODE_LONG_RANGE_MODE | MODE_RX_SINGLE)) {
+    // not currently in RX mode
+
+    // reset FIFO address
+    writeRegister(REG_FIFO_ADDR_PTR, 0);
+
+    // put in single RX mode
+    writeRegister(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_RX_SINGLE);
+  }
+
+  return packetLength;
+}
+
+int LoRaClass::packetRssi()
+{
+  return (readRegister(REG_PKT_RSSI_VALUE) - (_frequency < RF_MID_BAND_THRESHOLD ? RSSI_OFFSET_LF_PORT : RSSI_OFFSET_HF_PORT));
+}
+
+float LoRaClass::packetSnr()
+{
+  return ((int8_t)readRegister(REG_PKT_SNR_VALUE)) * 0.25;
+}
+
+long LoRaClass::packetFrequencyError()
+{
+  int32_t freqError = 0;
+  freqError = static_cast<int32_t>(readRegister(REG_FREQ_ERROR_MSB) & 0b111);
+  freqError <<= 8L;
+  freqError += static_cast<int32_t>(readRegister(REG_FREQ_ERROR_MID));
+  freqError <<= 8L;
+  freqError += static_cast<int32_t>(readRegister(REG_FREQ_ERROR_LSB));
+
+  if (readRegister(REG_FREQ_ERROR_MSB) & 0b1000) { // Sign bit is on
+     freqError -= 524288; // 0b1000'0000'0000'0000'0000
+  }
+
+  const float fXtal = 32E6; // FXOSC: crystal oscillator (XTAL) frequency (2.5. Chip Specification, p. 14)
+  const float fError = ((static_cast<float>(freqError) * (1L << 24)) / fXtal) * (getSignalBandwidth() / 500000.0f); // p. 37
+
+  return static_cast<long>(fError);
+}
+
+int LoRaClass::rssi()
+{
+  return (readRegister(REG_RSSI_VALUE) - (_frequency < RF_MID_BAND_THRESHOLD ? RSSI_OFFSET_LF_PORT : RSSI_OFFSET_HF_PORT));
+}
+
+size_t LoRaClass::write(uint8_t byte)
+{
+  return write(&byte, sizeof(byte));
+}
+
+size_t LoRaClass::write(const uint8_t *buffer, size_t size)
+{
+  int currentLength = readRegister(REG_PAYLOAD_LENGTH);
+
+  // check size
+  if ((currentLength + size) > MAX_PKT_LENGTH) {
+    size = MAX_PKT_LENGTH - currentLength;
+  }
+
+  // write data
+  for (size_t i = 0; i < size; i++) {
+    writeRegister(REG_FIFO, buffer[i]);
+  }
+
+  // update length
+  writeRegister(REG_PAYLOAD_LENGTH, currentLength + size);
+
+  return size;
+}
+
+int LoRaClass::available()
+{
+  return (readRegister(REG_RX_NB_BYTES) - _packetIndex);
+}
+
+int LoRaClass::read()
+{
+  if (!available()) {
+    return -1;
+  }
+
+  _packetIndex++;
+
+  return readRegister(REG_FIFO);
+}
+
+int LoRaClass::peek()
+{
+  if (!available()) {
+    return -1;
+  }
+
+  // store current FIFO address
+  int currentAddress = readRegister(REG_FIFO_ADDR_PTR);
+
+  // read
+  uint8_t b = readRegister(REG_FIFO);
+
+  // restore FIFO address
+  writeRegister(REG_FIFO_ADDR_PTR, currentAddress);
+
+  return b;
+}
+
+void LoRaClass::flush()
+{
+}
+
+#ifndef ARDUINO_SAMD_MKRWAN1300
+void LoRaClass::onReceive(void(*callback)(int))
+{
+  _onReceive = callback;
+
+  if (callback) {
+    pinMode(_dio0, INPUT);
+#ifdef SPI_HAS_NOTUSINGINTERRUPT
+    SPI.usingInterrupt(digitalPinToInterrupt(_dio0));
+#endif
+    attachInterrupt(digitalPinToInterrupt(_dio0), LoRaClass::onDio0Rise, RISING);
+  } else {
+    detachInterrupt(digitalPinToInterrupt(_dio0));
+#ifdef SPI_HAS_NOTUSINGINTERRUPT
+    SPI.notUsingInterrupt(digitalPinToInterrupt(_dio0));
+#endif
+  }
+}
+
+void LoRaClass::onCadDone(void(*callback)(boolean))
+{
+  _onCadDone = callback;
+
+  if (callback) {
+    pinMode(_dio0, INPUT);
+#ifdef SPI_HAS_NOTUSINGINTERRUPT
+    SPI.usingInterrupt(digitalPinToInterrupt(_dio0));
+#endif
+    attachInterrupt(digitalPinToInterrupt(_dio0), LoRaClass::onDio0Rise, RISING);
+  } else {
+    detachInterrupt(digitalPinToInterrupt(_dio0));
+#ifdef SPI_HAS_NOTUSINGINTERRUPT
+    SPI.notUsingInterrupt(digitalPinToInterrupt(_dio0));
+#endif
+  }
+}
+
+void LoRaClass::onTxDone(void(*callback)())
+{
+  _onTxDone = callback;
+
+  if (callback) {
+    pinMode(_dio0, INPUT);
+#ifdef SPI_HAS_NOTUSINGINTERRUPT
+    SPI.usingInterrupt(digitalPinToInterrupt(_dio0));
+#endif
+    attachInterrupt(digitalPinToInterrupt(_dio0), LoRaClass::onDio0Rise, RISING);
+  } else {
+    detachInterrupt(digitalPinToInterrupt(_dio0));
+#ifdef SPI_HAS_NOTUSINGINTERRUPT
+    SPI.notUsingInterrupt(digitalPinToInterrupt(_dio0));
+#endif
+  }
+}
+
+void LoRaClass::receive(int size)
+{
+
+  writeRegister(REG_DIO_MAPPING_1, 0x00); // DIO0 => RXDONE
+
+  if (size > 0) {
+    implicitHeaderMode();
+
+    writeRegister(REG_PAYLOAD_LENGTH, size & 0xff);
+  } else {
+    explicitHeaderMode();
+  }
+
+  writeRegister(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_RX_CONTINUOUS);
+}
+
+void LoRaClass::channelActivityDetection(void)
+{
+  writeRegister(REG_DIO_MAPPING_1, 0x80);// DIO0 => CADDONE
+  writeRegister(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_CAD);
+}
+#endif
+
+void LoRaClass::idle()
+{
+  writeRegister(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_STDBY);
+}
+
+void LoRaClass::sleep()
+{
+  writeRegister(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_SLEEP);
+}
+
+void LoRaClass::setTxPower(int level, int outputPin)
+{
+  if (PA_OUTPUT_RFO_PIN == outputPin) {
+    // RFO
+    if (level < 0) {
+      level = 0;
+    } else if (level > 14) {
+      level = 14;
+    }
+
+    writeRegister(REG_PA_CONFIG, 0x70 | level);
+  } else {
+    // PA BOOST
+    if (level > 17) {
+      if (level > 20) {
+        level = 20;
+      }
+
+      // subtract 3 from level, so 18 - 20 maps to 15 - 17
+      level -= 3;
+
+      // High Power +20 dBm Operation (Semtech SX1276/77/78/79 5.4.3.)
+      writeRegister(REG_PA_DAC, 0x87);
+      setOCP(140);
+    } else {
+      if (level < 2) {
+        level = 2;
+      }
+      //Default value PA_HF/LF or +17dBm
+      writeRegister(REG_PA_DAC, 0x84);
+      setOCP(100);
+    }
+
+    writeRegister(REG_PA_CONFIG, PA_BOOST | (level - 2));
+  }
+}
+
+void LoRaClass::setFrequency(long frequency)
+{
+  _frequency = frequency;
+
+  uint64_t frf = ((uint64_t)frequency << 19) / 32000000;
+
+  writeRegister(REG_FRF_MSB, (uint8_t)(frf >> 16));
+  writeRegister(REG_FRF_MID, (uint8_t)(frf >> 8));
+  writeRegister(REG_FRF_LSB, (uint8_t)(frf >> 0));
+}
+
+int LoRaClass::getSpreadingFactor()
+{
+  return readRegister(REG_MODEM_CONFIG_2) >> 4;
+}
+
+void LoRaClass::setSpreadingFactor(int sf)
+{
+  if (sf < 6) {
+    sf = 6;
+  } else if (sf > 12) {
+    sf = 12;
+  }
+
+  if (sf == 6) {
+    writeRegister(REG_DETECTION_OPTIMIZE, 0xc5);
+    writeRegister(REG_DETECTION_THRESHOLD, 0x0c);
+  } else {
+    writeRegister(REG_DETECTION_OPTIMIZE, 0xc3);
+    writeRegister(REG_DETECTION_THRESHOLD, 0x0a);
+  }
+
+  writeRegister(REG_MODEM_CONFIG_2, (readRegister(REG_MODEM_CONFIG_2) & 0x0f) | ((sf << 4) & 0xf0));
+  setLdoFlag();
+}
+
+long LoRaClass::getSignalBandwidth()
+{
+  byte bw = (readRegister(REG_MODEM_CONFIG_1) >> 4);
+
+  switch (bw) {
+    case 0: return 7.8E3;
+    case 1: return 10.4E3;
+    case 2: return 15.6E3;
+    case 3: return 20.8E3;
+    case 4: return 31.25E3;
+    case 5: return 41.7E3;
+    case 6: return 62.5E3;
+    case 7: return 125E3;
+    case 8: return 250E3;
+    case 9: return 500E3;
+  }
+
+  return -1;
+}
+
+void LoRaClass::setSignalBandwidth(long sbw)
+{
+  int bw;
+
+  if (sbw <= 7.8E3) {
+    bw = 0;
+  } else if (sbw <= 10.4E3) {
+    bw = 1;
+  } else if (sbw <= 15.6E3) {
+    bw = 2;
+  } else if (sbw <= 20.8E3) {
+    bw = 3;
+  } else if (sbw <= 31.25E3) {
+    bw = 4;
+  } else if (sbw <= 41.7E3) {
+    bw = 5;
+  } else if (sbw <= 62.5E3) {
+    bw = 6;
+  } else if (sbw <= 125E3) {
+    bw = 7;
+  } else if (sbw <= 250E3) {
+    bw = 8;
+  } else /*if (sbw <= 250E3)*/ {
+    bw = 9;
+  }
+
+  writeRegister(REG_MODEM_CONFIG_1, (readRegister(REG_MODEM_CONFIG_1) & 0x0f) | (bw << 4));
+  setLdoFlag();
+}
+
+void LoRaClass::setLdoFlag()
+{
+  // Section 4.1.1.5
+  long symbolDuration = 1000 / ( getSignalBandwidth() / (1L << getSpreadingFactor()) ) ;
+
+  // Section 4.1.1.6
+  boolean ldoOn = symbolDuration > 16;
+
+  uint8_t config3 = readRegister(REG_MODEM_CONFIG_3);
+  bitWrite(config3, 3, ldoOn);
+  writeRegister(REG_MODEM_CONFIG_3, config3);
+}
+
+void LoRaClass::setLdoFlagForced(const boolean ldoOn)
+{
+  uint8_t config3 = readRegister(REG_MODEM_CONFIG_3);
+  bitWrite(config3, 3, ldoOn);
+  writeRegister(REG_MODEM_CONFIG_3, config3);
+}
+
+void LoRaClass::setCodingRate4(int denominator)
+{
+  if (denominator < 5) {
+    denominator = 5;
+  } else if (denominator > 8) {
+    denominator = 8;
+  }
+
+  int cr = denominator - 4;
+
+  writeRegister(REG_MODEM_CONFIG_1, (readRegister(REG_MODEM_CONFIG_1) & 0xf1) | (cr << 1));
+}
+
+void LoRaClass::setPreambleLength(long length)
+{
+  writeRegister(REG_PREAMBLE_MSB, (uint8_t)(length >> 8));
+  writeRegister(REG_PREAMBLE_LSB, (uint8_t)(length >> 0));
+}
+
+void LoRaClass::setSyncWord(int sw)
+{
+  writeRegister(REG_SYNC_WORD, sw);
+}
+
+void LoRaClass::enableCrc()
+{
+  writeRegister(REG_MODEM_CONFIG_2, readRegister(REG_MODEM_CONFIG_2) | 0x04);
+}
+
+void LoRaClass::disableCrc()
+{
+  writeRegister(REG_MODEM_CONFIG_2, readRegister(REG_MODEM_CONFIG_2) & 0xfb);
+}
+
+void LoRaClass::enableInvertIQ()
+{
+  writeRegister(REG_INVERTIQ,  0x66);
+  writeRegister(REG_INVERTIQ2, 0x19);
+}
+
+void LoRaClass::disableInvertIQ()
+{
+  writeRegister(REG_INVERTIQ,  0x27);
+  writeRegister(REG_INVERTIQ2, 0x1d);
+}
+
+void LoRaClass::enableLowDataRateOptimize()
+{
+   setLdoFlagForced(true);
+}
+
+void LoRaClass::disableLowDataRateOptimize()
+{
+   setLdoFlagForced(false);
+}
+
+void LoRaClass::setOCP(uint8_t mA)
+{
+  uint8_t ocpTrim = 27;
+
+  if (mA <= 120) {
+    ocpTrim = (mA - 45) / 5;
+  } else if (mA <=240) {
+    ocpTrim = (mA + 30) / 10;
+  }
+
+  writeRegister(REG_OCP, 0x20 | (0x1F & ocpTrim));
+}
+
+void LoRaClass::setGain(uint8_t gain)
+{
+  // check allowed range
+  if (gain > 6) {
+    gain = 6;
+  }
+  
+  // set to standby
+  idle();
+  
+  // set gain
+  if (gain == 0) {
+    // if gain = 0, enable AGC
+    writeRegister(REG_MODEM_CONFIG_3, 0x04);
+  } else {
+    // disable AGC
+    writeRegister(REG_MODEM_CONFIG_3, 0x00);
+	
+    // clear Gain and set LNA boost
+    writeRegister(REG_LNA, 0x03);
+	
+    // set gain
+    writeRegister(REG_LNA, readRegister(REG_LNA) | (gain << 5));
+  }
+}
+
+byte LoRaClass::random()
+{
+  return readRegister(REG_RSSI_WIDEBAND);
+}
+
+void LoRaClass::setPins(int ss, int reset, int dio0)
+{
+  _ss = ss;
+  _reset = reset;
+  _dio0 = dio0;
+}
+
+void LoRaClass::setSPI(SPIClass& spi)
+{
+  _spi = &spi;
+}
+
+void LoRaClass::setSPIFrequency(uint32_t frequency)
+{
+  _spiSettings = SPISettings(frequency, MSBFIRST, SPI_MODE0);
+}
+
+void LoRaClass::dumpRegisters(Stream& out)
+{
+  for (int i = 0; i < 128; i++) {
+    out.print("0x");
+    out.print(i, HEX);
+    out.print(": 0x");
+    out.println(readRegister(i), HEX);
+  }
+}
+
+void LoRaClass::explicitHeaderMode()
+{
+  _implicitHeaderMode = 0;
+
+  writeRegister(REG_MODEM_CONFIG_1, readRegister(REG_MODEM_CONFIG_1) & 0xfe);
+}
+
+void LoRaClass::implicitHeaderMode()
+{
+  _implicitHeaderMode = 1;
+
+  writeRegister(REG_MODEM_CONFIG_1, readRegister(REG_MODEM_CONFIG_1) | 0x01);
+}
+
+void LoRaClass::handleDio0Rise()
+{
+  int irqFlags = readRegister(REG_IRQ_FLAGS);
+
+  // clear IRQ's
+  writeRegister(REG_IRQ_FLAGS, irqFlags);
+
+  if ((irqFlags & IRQ_CAD_DONE_MASK) != 0) {
+    if (_onCadDone) {
+      _onCadDone((irqFlags & IRQ_CAD_DETECTED_MASK) != 0);
+    }
+  } else if ((irqFlags & IRQ_PAYLOAD_CRC_ERROR_MASK) == 0) {
+
+    if ((irqFlags & IRQ_RX_DONE_MASK) != 0) {
+      // received a packet
+      _packetIndex = 0;
+
+      // read packet length
+      int packetLength = _implicitHeaderMode ? readRegister(REG_PAYLOAD_LENGTH) : readRegister(REG_RX_NB_BYTES);
+
+      // set FIFO address to current RX address
+      writeRegister(REG_FIFO_ADDR_PTR, readRegister(REG_FIFO_RX_CURRENT_ADDR));
+
+      if (_onReceive) {
+        _onReceive(packetLength);
+      }
+    } else if ((irqFlags & IRQ_TX_DONE_MASK) != 0) {
+      if (_onTxDone) {
+        _onTxDone();
+      }
+    }
+  }
+}
+
+uint8_t LoRaClass::readRegister(uint8_t address)
+{
+  return singleTransfer(address & 0x7f, 0x00);
+}
+
+void LoRaClass::writeRegister(uint8_t address, uint8_t value)
+{
+  singleTransfer(address | 0x80, value);
+}
+
+uint8_t LoRaClass::singleTransfer(uint8_t address, uint8_t value)
+{
+  uint8_t response;
+
+  _spi->beginTransaction(_spiSettings);
+  digitalWrite(_ss, LOW);
+  _spi->transfer(address);
+  response = _spi->transfer(value);
+  digitalWrite(_ss, HIGH);
+  _spi->endTransaction();
+
+  return response;
+}
+
+ISR_PREFIX void LoRaClass::onDio0Rise()
+{
+  LoRa.handleDio0Rise();
+}
+
+LoRaClass LoRa;
+
+--------------------
+END OF FILE: lib\LoRa\LoRa.cpp
+
+START OF FILE: lib\LoRa\LoRa.h
+--------------------
+// Copyright (c) Sandeep Mistry. All rights reserved.
+// Licensed under the MIT license. See LICENSE file in the project root for full license information.
+
+#ifndef LORA_H
+#define LORA_H
+
+#include <Arduino.h>
+#include <SPI.h>
+
+#if defined(ARDUINO_SAMD_MKRWAN1300)
+#define LORA_DEFAULT_SPI           SPI1
+#define LORA_DEFAULT_SPI_FREQUENCY 200000
+#define LORA_DEFAULT_SS_PIN        LORA_IRQ_DUMB
+#define LORA_DEFAULT_RESET_PIN     -1
+#define LORA_DEFAULT_DIO0_PIN      -1
+#elif defined(ARDUINO_SAMD_MKRWAN1310)
+#define LORA_DEFAULT_SPI           SPI1
+#define LORA_DEFAULT_SPI_FREQUENCY 200000
+#define LORA_DEFAULT_SS_PIN        LORA_IRQ_DUMB
+#define LORA_DEFAULT_RESET_PIN     -1
+#define LORA_DEFAULT_DIO0_PIN      LORA_IRQ
+#else
+#define LORA_DEFAULT_SPI           SPI
+#define LORA_DEFAULT_SPI_FREQUENCY 8E6 
+#define LORA_DEFAULT_SS_PIN        10
+#define LORA_DEFAULT_RESET_PIN     9
+#define LORA_DEFAULT_DIO0_PIN      2
+#endif
+
+#define PA_OUTPUT_RFO_PIN          0
+#define PA_OUTPUT_PA_BOOST_PIN     1
+
+class LoRaClass : public Stream {
+public:
+  LoRaClass();
+
+  int begin(long frequency);
+  void end();
+
+  int beginPacket(int implicitHeader = false);
+  int endPacket(bool async = false);
+
+  int parsePacket(int size = 0);
+  int packetRssi();
+  float packetSnr();
+  long packetFrequencyError();
+
+  int rssi();
+
+  // from Print
+  virtual size_t write(uint8_t byte);
+  virtual size_t write(const uint8_t *buffer, size_t size);
+
+  // from Stream
+  virtual int available();
+  virtual int read();
+  virtual int peek();
+  virtual void flush();
+
+#ifndef ARDUINO_SAMD_MKRWAN1300
+  void onReceive(void(*callback)(int));
+  void onCadDone(void(*callback)(boolean));
+  void onTxDone(void(*callback)());
+
+  void receive(int size = 0);
+  void channelActivityDetection(void);
+#endif
+  void idle();
+  void sleep();
+
+  void setTxPower(int level, int outputPin = PA_OUTPUT_PA_BOOST_PIN);
+  void setFrequency(long frequency);
+  void setSpreadingFactor(int sf);
+  void setSignalBandwidth(long sbw);
+  void setCodingRate4(int denominator);
+  void setPreambleLength(long length);
+  void setSyncWord(int sw);
+  void enableCrc();
+  void disableCrc();
+  void enableInvertIQ();
+  void disableInvertIQ();
+  void enableLowDataRateOptimize();
+  void disableLowDataRateOptimize();
+  
+  void setOCP(uint8_t mA); // Over Current Protection control
+  
+  void setGain(uint8_t gain); // Set LNA gain
+
+  // deprecated
+  void crc() { enableCrc(); }
+  void noCrc() { disableCrc(); }
+
+  byte random();
+
+  void setPins(int ss = LORA_DEFAULT_SS_PIN, int reset = LORA_DEFAULT_RESET_PIN, int dio0 = LORA_DEFAULT_DIO0_PIN);
+  void setSPI(SPIClass& spi);
+  void setSPIFrequency(uint32_t frequency);
+
+  void dumpRegisters(Stream& out);
+
+private:
+  void explicitHeaderMode();
+  void implicitHeaderMode();
+
+  void handleDio0Rise();
+  bool isTransmitting();
+
+  int getSpreadingFactor();
+  long getSignalBandwidth();
+
+  void setLdoFlag();
+  void setLdoFlagForced(const boolean);
+
+  uint8_t readRegister(uint8_t address);
+  void writeRegister(uint8_t address, uint8_t value);
+  uint8_t singleTransfer(uint8_t address, uint8_t value);
+
+  static void onDio0Rise();
+
+private:
+  SPISettings _spiSettings;
+  SPIClass* _spi;
+  int _ss;
+  int _reset;
+  int _dio0;
+  long _frequency;
+  int _packetIndex;
+  int _implicitHeaderMode;
+  void (*_onReceive)(int);
+  void (*_onCadDone)(boolean);
+  void (*_onTxDone)();
+};
+
+extern LoRaClass LoRa;
+
+#endif
+
+--------------------
+END OF FILE: lib\LoRa\LoRa.h
+
+START OF FILE: lib\LoRa\LoRaManager.h
+--------------------
+
+--------------------
+END OF FILE: lib\LoRa\LoRaManager.h
+
+START OF FILE: lib\Pinout\Pinout.h
+--------------------
+#pragma once
+
+#include <Arduino.h>
+
+// I2C для AHT10 и OLED
+#define I2C_SDA          4
+#define I2C_SCL          5
+
+// SPI для Ra-02 (LoRa)
+#define LORA_SCK         6
+#define LORA_MISO        7
+#define LORA_MOSI        8
+#define LORA_SS          10
+#define LORA_RST         9
+#define LORA_DIO0        2
+#define LORA_DIO1        3
+
+// Периферия
+#define BUTTON_PIN       10    // Подтяжка "вверх" (INPUT_PULLUP)
+#define BATTERY_ADC_PIN  1    // Делитель напряжения
+//#define SENSOR_POWER_PIN 20   // MOSFET для питания датчиков (опционально)
+
+// Параметры дисплея
+#define OLED_RESET       -1
+#define OLED_ADDR        0x3C
+--------------------
+END OF FILE: lib\Pinout\Pinout.h
+
+START OF FILE: src\main.cpp
+--------------------
+#include <Arduino.h>
+#include "FSMManager.h"
+#include "Button2.h"
+#include "AppConfig.h"
+#include "DataLogger.h"
+
+Button2 btn(0); // Кнопка на GPIO 0 (ESP32-C3)
+
+void setup() {
+    Serial.begin(115200);
+    AppConfig.begin(); 
+    dataLogger.begin();
+    // Настройка кнопки через библиотеку Button2
+    btn.setClickHandler([](Button2& b){
+        fsm.handleEvent(FSMEvent::BTN_SHORT);
+    });
+    
+    btn.setLongClickHandler([](Button2& b){
+        fsm.handleEvent(FSMEvent::BTN_LONG);
+    });
+
+    // Инициализация FSM
+    fsm.init(StateType::WORK); 
+}
+
+void loop() {
+    btn.loop();     // Проверка кнопки
+    fsm.update();   // Тик текущего состояния (onUpdate)
+}
+--------------------
+END OF FILE: src\main.cpp
+

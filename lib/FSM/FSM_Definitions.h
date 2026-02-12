@@ -16,7 +16,9 @@ enum class FSMEvent {
     BTN_SHORT,
     BTN_LONG,
     BTN_DOUBLE,
-    SENSOR_DONE,
+    WORK_COMPLETE,  // <<< ИЗМЕНЕНО: Заменили SENSOR_DONE. Означает, что работа завершена, можно спать.
+    TIME_TO_SEND,   // <<< НОВОЕ: Настало время для отправки данных (по счетчику N)
+    TIME_TO_SYNC,   // <<< НОВОЕ: Настало время для синхронизации времени (по счетчику D)
     SEND_SUCCESS,
     SEND_FAIL,
     SYNC_SUCCESS, // Время успешно получено
