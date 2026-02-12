@@ -101,4 +101,4 @@ void DisplayUIClass::_drawNetworkScreen() {
         _display->println("SSID: " + AppConfig.ssid);
     }
      _display->printf("LoRa: %d Mhz\n", (int)(AppConfig.loraFrequency / 1E6));
-}
+} 

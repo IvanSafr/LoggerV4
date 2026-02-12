@@ -2,18 +2,14 @@
 #define STATE_WORK_H
 
 #include "FSM_Definitions.h"
-#include "FSMManager.h" // Required for fsm.handleEvent
+#include "FSMManager.h"
 #include "AppConfig.h"
-#include "DataLogger.h"    // Required for DataEntry and dataLogger
+#include "DataLogger.h"
+#include "Pinout.h" // <<< ИЗМЕНЕНО: Используем Pinout.h для пина батареи
 #include "Adafruit_AHTX0.h"
 
-// Define or include Pinout
-#ifndef ADC_BAT_PIN
-#define ADC_BAT_PIN 1 // Example pin, change to actual
-#endif
-
-extern Adafruit_AHTX0 aht; 
-extern DataLoggerClass dataLogger; 
+extern Adafruit_AHTX0 aht;
+extern DataLoggerClass dataLogger;
 
 class State_Work : public BaseState {
 public:
@@ -21,10 +17,10 @@ public:
         Serial.println("FSM: -> WORK (Measuring)");
 
         sensors_event_t humidity, temp;
-        // Ensure 'aht' is initialized in main setup
         aht.getEvent(&humidity, &temp);
 
-        float v_bat = (analogRead(ADC_BAT_PIN) * 3.3 / 4095.0) * 2.0; 
+        // <<< ИЗМЕНЕНО: Используем константу из Pinout.h >>>
+        float v_bat = (analogRead(BATTERY_ADC_PIN) * 3.3 / 4095.0) * 2.0;
         int bat_pct = map(v_bat * 100, 330, 420, 0, 100);
         bat_pct = constrain(bat_pct, 0, 100);
 
@@ -33,23 +29,34 @@ public:
         entry.temperature = temp.temperature;
         entry.humidity = humidity.relative_humidity;
         entry.battery = bat_pct;
-        
+
         dataLogger.write(entry);
 
         AppConfig.wakeCount++;
-        AppConfig.save(); 
+        AppConfig.save();
 
+        // <<< НОВОЕ: Ключевая логика принятия решений о следующем состоянии >>>
+        // Проверяем, нужно ли синхронизировать время (самый высокий приоритет)
         if (AppConfig.wakeCount % AppConfig.D_netSync == 0) {
-            fsm.handleEvent(FSMEvent::SENSOR_DONE); 
-        } else if (AppConfig.wakeCount % AppConfig.N_sendData == 0) {
-            fsm.handleEvent(FSMEvent::SENSOR_DONE); 
-        } else {
-            fsm.handleEvent(FSMEvent::SENSOR_DONE); 
+            Serial.println("WORK: Time to sync network time.");
+            fsm.handleEvent(FSMEvent::TIME_TO_SYNC);
+        }
+        // Иначе проверяем, нужно ли отправлять данные
+        else if (AppConfig.wakeCount % AppConfig.N_sendData == 0) {
+            Serial.println("WORK: Time to send data.");
+            fsm.handleEvent(FSMEvent::TIME_TO_SEND);
+        }
+        // Если ничего из вышеперечисленного не требуется, просто завершаем работу
+        else {
+            Serial.println("WORK: Measurement complete, going back to sleep.");
+            fsm.handleEvent(FSMEvent::WORK_COMPLETE);
         }
     }
 
     void onUpdate() override {}
-    void onExit() override {}
+    void onExit() override {
+        Serial.println("FSM: <- WORK"); // <<< НОВОЕ: Добавлен лог выхода
+    }
     StateType getType() const override { return StateType::WORK; }
 };
 

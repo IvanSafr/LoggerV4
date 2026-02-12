@@ -1,11 +1,11 @@
 #include "FSMManager.h"
 #include "StateFactory.h"
 #include "AppConfig.h"
-#include "states/State_ScreenOn.h" // <<< НОВОЕ: Нужно для приведения типа
+#include "states/State_ScreenOn.h" // Нужно для приведения типа
+#include "DisplayUI.h"             // <<< НОВОЕ: Нужно для вызова DisplayUI.nextScreen()
 
 FSMManager fsm;
 
-// ... (init, update, _changeState без изменений) ...
 void FSMManager::init(StateType initialState) {
     _changeState(initialState);
 }
@@ -40,11 +40,11 @@ void FSMManager::handleEvent(FSMEvent event) {
             if (current == StateType::SLEEP) {
                 _changeState(StateType::SCREEN_ON);
             }
-            // <<< НОВОЕ: Логика переключения экранов >>>
             else if (current == StateType::SCREEN_ON) {
-                // Приводим указатель базового класса к типу дочернего,
-                // чтобы получить доступ к его уникальному методу resetTimer()
-                if (auto screenOnState = dynamic_cast<State_ScreenOn*>(_currentState)) {
+                // <<< ИСПРАВЛЕНО: Заменен dynamic_cast на static_cast >>>
+                // Это преобразование безопасно, так как мы находимся внутри проверки
+                // current == StateType::SCREEN_ON.
+                if (auto screenOnState = static_cast<State_ScreenOn*>(_currentState)) {
                     DisplayUI.nextScreen();      // Сначала переключаем экран
                     screenOnState->resetTimer(); // Затем сбрасываем таймер
                 }
@@ -55,7 +55,6 @@ void FSMManager::handleEvent(FSMEvent event) {
             if (current == StateType::SCREEN_ON) _changeState(StateType::SLEEP);
             break;
 
-        // ... (остальная часть switch без изменений) ...
         case FSMEvent::WORK_COMPLETE:
             _changeState(StateType::SLEEP);
             break;
